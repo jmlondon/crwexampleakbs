@@ -1,0 +1,134 @@
+---
+title: "Satellite Telemetry Dataset (raw): bearded and spotted seals in 2004-2006, Kotzebue, Alaska"
+subtitle: "Get Data from the Wildlife Computers Data Portal"
+draft: true
+author:
+- name: Josh M. London
+  affiliation: 1
+- name: Michael F. Cameron
+  affiliation: 2
+- name: Peter L. Boveng
+  affiliation: 2
+address:
+- code: 1
+  address: Alaska Fisheries Science Center, NOAA Fisheries, Seattle, Washington, USA 
+  email: josh.london@noaa.gov
+  orcid: http://orcid.org/0000-0002-3647-5046
+- code: 2
+  address: Alaska Fisheries Science Center, NOAA Fisheries, Seattle, Washington, USA 
+disclaimer: >
+  The scientific results and conclusions, as well as any views or opinions 
+  expressed herein, are those of the author(s) and do not necessarily reflect 
+  those of NOAA or the Department of Commerce.
+abstract: >
+  This document describes the process for downloading *raw* telemetry data from
+  the Wildlife Computers (https://wildlifecomputers.com/) Data Portal via their
+  API. The data are provided as zipped archives for each deployment and are
+  preserved as is. The data files and associated metadata files are intended for
+  publication on the DataOne network and the entire data package will be given
+  a unique Digital Object Identifier. 
+output: 
+  uswebr::html_uswds:
+    number_sections: FALSE
+params:
+  get_data: TRUE
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+# Connect to the Data Portal
+
+Wildlife Computers (Redmond, Washington, USA) provides an API for their [data
+portal](https://wildlifecomputers.com/) that allows us to download the latest 
+telemetry data for any deployment. To facilitate connection and use of this API 
+within R, the `wcUtils` package has been developed.
+
+The data portal is not a public repository. Data access is controlled by the
+data owner. Thus, only those users who are either owners of the deployment 
+data or users who have been granted access by the owner can access the API.
+
+The `wcUtils` package is available for install from GitHub:
+
+```{r install-wcutils}
+if (!require('devtools')) install.packages('devtools')
+if (!require('wcUtils')) {
+  devtools::install_github('jmlondon/wcUtils')
+}
+if (!require('tidyverse')) install.packages('tidyverse')
+```
+
+
+# Download KotzEB04 Telemetry
+
+All of the deployments have been labeled within the data portal as 
+*ProjectID = KotzEB04*. We will use that information to only download the 
+relevant data.
+
+```{r get-data-from-wc, eval = as.logical(params$get_data)}
+# first thing, get deployment data from WCDP
+r <- wcUtils::wcPOST()
+# get KotzEB09 ids and download the data
+kotz_ids <- wcUtils::wcGetProjectIDs(r,project = 'KotzEB04')
+
+for (i in 1:length(kotz_ids)) {
+  zipfile <- wcUtils::wcGetZip(id = kotz_ids[i])
+  file.copy(zipfile,'.',overwrite = TRUE)
+  file.rename(file.path(basename(zipfile)),
+              file.path(paste(kotz_ids[i],"zip",sep = '.'))
+  )
+}
+```
+
+The zip files downloaded from the data portal are named based on the 
+unique id assigned within the data portal. For our deployments, we have 
+assigned each a unique `DeployID`. It would be more informative if we could
+rename all of these zip files to the assigned `DeployID`. Eventually, this
+functionality could be implemented within the `wcUtils` package and the API,
+but for now, we'll just open each zip file and examine the data files to
+extract the assigned `DeployID`.
+
+```{r rename-zip-files}
+df <- tibble::as_tibble()
+for (zipfile in list.files(pattern = ".zip",full.names = TRUE)) {
+  summary_name <- grep('*-Summary.csv',
+                      unzip(file.path(
+                                      basename(zipfile)),
+                            list = TRUE)$Name,
+                       value = TRUE)
+  deployid <- read.csv(unzip(zipfile, files = summary_name))$DeployID
+  deployid <- as.character(deployid)
+  ptt <- read.csv(unzip(zipfile, files = summary_name))$Ptt
+  ptt <- as.character(ptt)
+  instr <- read.csv(unzip(zipfile, files = summary_name))$Instr
+  instr <- as.character(instr)
+  first_tx <- read.csv(unzip(zipfile, files = summary_name))$LatestXmitTime
+  first_tx <- as.character(first_tx)
+  last_tx <- read.csv(unzip(zipfile, files = summary_name))$LatestXmitTime
+  last_tx <- as.character(last_tx)
+  ndays_tx <- read.csv(unzip(zipfile, files = summary_name))$XmitDays
+  ndays_tx <- as.character(ndays_tx)
+  
+  file.remove(summary_name)
+  file.rename(file.path(zipfile),
+              file.path(paste(deployid,"zip",sep = '.'))
+  )
+  
+  df <- df %>% dplyr::bind_rows(list(filename = paste(deployid,"zip",sep = '.'),
+                 instrument = instr,
+                 "Ptt ID" = ptt,
+                 "first transmission" = first_tx,
+                 "last transmission" = last_tx,
+                 "no. days" = ndays_tx
+                 ))
+}
+```
+
+## List of Archive Files
+
+```{r list-downloaded-files}
+df %>% knitr::kable(booktabs = TRUE,
+  caption = 'Files and Associated Key Deployment Statistics')
+```
+
