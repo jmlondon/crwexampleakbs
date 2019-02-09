@@ -1,0 +1,17 @@
+Package: crwexampleakbs
+Title: AK bearded and spotted seal example dataset and analysis
+Type: Compendium
+Version: 0.1
+Authors@R: 
+    person(given = "Josh",
+           family = "London",
+           role = c("aut", "cre"),
+           email = "josh.london@noaa.gov")
+Description: This is a compendium of example data and code designed to 
+  help end users explore the crawl package for analysis of animal 
+  movement from telemetry data. 
+License: CCO | file LICENSE
+Encoding: UTF-8
+LazyData: true
+URL: https://github.com/jmlondon/crwexampleakbs
+BugReports: https://github.com/jmlondon/crwexampleakbs/issues
