@@ -1,0 +1,627 @@
+---
+title: "Alaska bearded and spotted seal example dataset and analysis"
+subtitle: "supporting material for the `crawl` package"
+draft: true
+author:
+- name: Josh M. London
+  affiliation: 1
+- name: Devin S. Johson
+  affiliation: 2
+address:
+- code: 1
+  address: Alaska Fisheries Science Center, NOAA, Seattle, WA, USA 
+  email: josh.london@noaa.gov
+  orcid: orcid.org/0000-0002-3647-5046
+- code: 2
+  address: Alaska Fisheries Science Center, NOAA, Seattle, WA, USA 
+  email: devin.johnson@noaa.gov
+date: "`r format(Sys.Date(), '%d %B, %Y')`"
+abstract: >
+  The `crawl` package is an R package that provides analytical tools for
+  estimating the movement paths of animals from telemetry data. The package
+  is specifically designed with marine mammals in mind, but other species
+  in other habits with similar telemetry devices will work. This package
+  compendium provides step-by-step instructions for importing and 
+  setting up the telemetry data, initiating the `crwMLE()`, `crwPredict(),
+  and `crwSimulator()`/'crwPostIS()` functions and visualizing results. The
+  write up also discusses use of the `fix_path()` function to re-route
+  predicted tracks around land. A few examples of data visualization
+  plots are also presented. This compendium was originaly developed in 
+  support of a training course at the NOAA Fisheries Protected Species
+  Assessment Workshop in La Jolla, California, USA.
+output: 
+  uswebr::html_uswds:
+    number_sections: FALSE
+    df_print: tibble
+---
+
+## Introduction to Telemetry Data
+
+The `crawl` package in R is designed, mostly, with telemetry data from 
+satellite linked bio-loggers in mind. Locations derived from the ARGOS
+satellite system or the GPS system (with data either recovered post-deployemnt
+or transmitted during deployment) are the most common data source. In this
+example, the data are all locations derived from the ARGOS satellite system.
+
+The ARGOS system can have significant error associated with each location
+estimate and those errors are described as either location qualities (3,2,1,0,A,B)
+or, in more recent data, values that describe the ellipse error for each 
+location. For this example, we will focus on the location quality values
+and use a fairly generic set of values to describe each error quality.
+
+## Loading Raw Telemetry Data
+
+The data for this example are available for download from the original source on
+the [DataONE network](https://search.dataone.org/view/10.24431/rw1k118). These
+were all deployments of bio-loggers from Wildlife Computers (Redmond,
+Washington, USA) and each is a zipped archive pulled from the Wildlife Computers
+Data Portal. Each archive contains both location and behavior data. For this
+example, we will focus on just the location data.
+
+please cite any use of the original data provided here with the following citation:
+
+> Michael Cameron, Josh London, Kathy Frost, Alex Whiting, and Peter Boveng. Satellite Telemetry Dataset (Raw): Juvenile Bearded and Spotted Seals, 2004-2006, Kotzebue, Alaska. Research Workspace. 10.24431/rw1k118. 
+
+And, if you are interested in learning more about the science, ecology, and
+behavior of bearded (and spotted) seals, I recommend 
+reading [this article](https://doi.org/10.1371/journal.pone.0192743) available
+on PlosONE.
+
+All of the data are stored within the `data-raw` folder of our root
+repository. We will use `list.files` and the `walk` function from
+`purrr` to unzip everything into a temp directory.
+
+```{r setup-load-data}
+library(tidyverse)
+library(here)
+# here::here() provides a path relative to the project root directory
+data_path <- here::here("data-raw")
+td <- tempdir()
+
+list.files(file.path(data_path), full.names=TRUE, pattern = "*.zip") %>%
+  purrr::walk(~ unzip(.x, exdir = td, overwrite = TRUE)) 
+```
+
+The next step is to read just the _*-Locations.csv_ file into R. The
+`readr::read_csv()` function allows us to set the column data types
+in advance
+
+```{r col-types}
+my_cols <- cols(
+  DeployID = col_character(),
+  Ptt = col_integer(),
+  Instr = col_character(),
+  Date = col_datetime("%H:%M:%S %d-%b-%Y"),
+  Type = col_character(),
+  Quality = col_character(),
+  Latitude = col_double(),
+  Longitude = col_double(),
+  `Error radius` = col_integer(),
+  `Error Semi-major axis` = col_integer(),
+  `Error Semi-minor axis` = col_integer(),
+  `Error Ellipse orientation` = col_integer(),
+  Offset = col_character(),
+  `Offset orientation` = col_character(),
+  `GPE MSD` = col_character(),
+  `GPE U` = col_character(),
+  Count = col_character(),
+  Comment = col_character()
+)
+```
+
+Now, we can combine the power of `readr::read_csv()` with `purrr:map_df()`
+to read in all of the _*-Locations.csv_ files into a single tibble (data.frame).
+
+```{r read-csv}
+tbl_locs <- list.files(file.path(td), full.names = TRUE, 
+                       pattern = "*-Locations.csv") %>% 
+  purrr::map_df( ~ readr::read_csv(.x, col_types = my_cols))
+
+```
+
+A key tennant of tidy data is that each row represents a single observation. For
+location data, regardless of the data source, this is typical of the source data
+structure. Each line in a file usually represents a single location estimate at
+a specific time. So, there's very little we need to do in order to get our
+`tbl_locs` into an acceptable structure.
+
+One thing we can do, is to adjust the column names so there are no spaces or
+hyphens. We can also drop everything to lower-case to avoid typos. To do this
+we will rely on the `clean_names()` function within the `janitor` package. 
+We also want to change the `date` column to a more appropriate and less 
+confusing `date_time`. And, just because, I prefer `deployid` over `deploy_id`.
+
+```{r}
+library(janitor)
+tbl_locs <- tbl_locs %>% 
+  janitor::clean_names() %>%  
+  dplyr::rename(date_time = date,
+                deployid = deploy_id) %>% 
+  dplyr::arrange(deployid, date_time)
+```
+
+Let's get a quick summary of our deployments
+
+```{r deploy-summary}
+tbl_locs %>% dplyr::group_by(deployid) %>% 
+  dplyr::summarise(num_locs = n(),
+            start_date = min(date_time),
+            end_date = max(date_time))
+```
+
+There are some locations that were from test transmissions at the
+Wildlife Computers office in Redmond, Washington, USA and at St. Andrews
+in Scotland for a few SMRU tags. We can filter those out based on the
+longitude values.
+
+```{r remove-test-tx}
+tbl_locs <- tbl_locs %>% 
+  dplyr::filter(!between(longitude, -125, -120),
+                !between(longitude, -50,0))
+```
+
+## Visualizing Source Data 
+
+To further explore our imported data and confirm there aren’t any remaining 
+issues to address, we can create visual representations of the data. The first
+plot will rely on the spatial features within `ggplot2` and a custom `ptolemy`
+package with world coastline data to create a plot of the `tbl_locs` object.
+
+The `sf` package provides the bulk of our spatial data framework. This is not
+intended to be a full `sf` tutorial, but, where possible, we will highlight a few
+features and functions to explain the workflow. Users are encouraged to spend
+significant time exploring and understanding the `sf` package through existing
+documentation and several examples and blog posts available online. We also load
+the `ggspatial` package for some convenience elements when plotting maps with
+`ggplot`. 
+
+```{r spatial-libs}
+library(sf)
+library(ggspatial)
+
+# library(devtools)
+# devtools::install_github('jmlondon/ptolemy')
+# after install, load and follow prompts to download source data
+library(ptolemy)
+```
+
+Here, we are simply creating an `sf_locs` object via the `sf::st_as_sf()`
+function. We specify the coordinate columns and then indicate the projection 
+of the data is geographic (lat/lon) as indicated by the _4326_ epsg code.
+
+In addition to points, it is often useful to organize the point data into 
+separate tracks for each deployment. The code to derive tracks from point 
+data within `sf` is a bit more complicated but is demonstrated below. It is
+important that you include the `do_union = FALSE` argument to the
+`dplyr::summarise()` function to maintain point order when creating the lines.
+
+```{r create-sf-objects}
+sf_locs <- sf::st_as_sf(tbl_locs, coords = c("longitude","latitude")) %>% 
+  sf::st_set_crs(4326)
+
+sf_lines <- sf_locs %>% 
+  dplyr::arrange(deployid, date_time) %>% 
+  dplyr::group_by(deployid) %>% 
+  dplyr::summarise(do_union = FALSE) %>% 
+  sf::st_cast("MULTILINESTRING")
+```
+
+The `sf_lines` object is, essentially, a data frame with each row representing 
+a single line from a single deployment.
+
+These data are still in the WGS84 geographic coordinate system. Projecting the
+data into a more appropriate coordinate reference system is strongly
+encouraged and needed for some functionality in `crawl`. This is especially
+important when/if data cross the 180 line, are spread over a large
+latitudinal range, or within the polar regions.
+
+```{r reproject}
+sf_locs <- sf_locs %>% 
+  sf::st_transform(3571)
+sf_lines <- sf_lines %>% 
+  sf::st_transform(3571)
+```
+
+The `ptolemy` package provides a number of pre-built collections of coastline
+data. In this case, we are interested in Alaska and the Bering Sea.
+
+```{r ak-bering-coastline}
+bering <- ptolemy::bering()
+```
+
+And, now, we build the `ggplot` using our `sf_lines` object. The
+`annotation_spatial()` and `layer_spatial()` functions are helpers for 
+handling some of the complexities for plotting spatial data with `ggplot2`. 
+Most notably, it auto-picks a sensible bounding box.
+
+```{r plot-raw-lines}
+ggplot() + 
+  annotation_spatial(bering, fill = "grey", lwd = 0) +
+  layer_spatial(sf_lines, size = 0.75,aes(color = deployid)) +
+  theme(legend.position = "none") +
+  scale_color_viridis_d() +
+  scale_x_continuous(breaks = seq(-180, 180, by = 5)) +
+  ggtitle("Observed Argos Location Paths", 
+          subtitle = "bearded and spotted seals, Bering Sea")
+```
+
+We can also plot the individual points themselves. However, if we're not
+careful, the `ggplot` and `geom_sf()` process can be overwelmed and take
+several minutes to plot (this will be fixed in upcomming updates to `ggplto2` and
+`sf`). We have `r nrow(sf_locs)` _POINT_ records in our
+`sf_locs` object. Instead of sending an object of many _POINT_ records to
+`geom_sf` it is better to send fewer _MULTIPOINT_ recrods that, each, contain
+many points. In this case, we can group our points into _MULTIPOINT_
+features based on the `deployid` column.
+
+```{r plot-raw-points}
+ggplot() + 
+  annotation_spatial(bering, fill = "grey", lwd = 0) +
+  layer_spatial(data = sf_locs %>% 
+            dplyr::group_by(deployid) %>% 
+            dplyr::summarise(), 
+          size = 0.75, aes(color = deployid)) +
+  theme(legend.position = "none") +
+  scale_color_viridis_d() +
+  scale_x_continuous(breaks = seq(-180, 180, by = 5)) +
+  ggtitle("Observed Argos Location Points", 
+          subtitle = "bearded and spotted seals, Bering Sea")
+```
+
+## Duplicate Times
+
+Argos data often contain near duplicate records. These are 
+identified by location estimates with the same date-time but differing 
+coordinate or error values. In theory, `crawl::crwMLE()` can handle these
+situations, but we have found it is more reliable to fix these records. The 
+first option for fixing the records would be to eliminate one of the duplicate
+records. However, it is often not possible to reliably identify which record is
+more appropriate to discard. For this reason, we advocate adjusting the 
+date-time value for one of the records and increasing the value by 10 seconds. 
+To facilitate this, we will rely on the `xts::make.time.unique()` function.
+
+```{r dup-times, warning=FALSE, message = FALSE}
+make_unique <- function(x) {
+  suppressWarnings(
+  xts::make.time.unique(x$date_time,eps = 10)
+  )
+}
+
+library(xts)
+
+tbl_locs <- tbl_locs %>% 
+  dplyr::arrange(deployid,date_time) %>% 
+  dplyr::group_by(deployid) %>% tidyr::nest() %>% 
+  dplyr::mutate(unique_time = purrr::map(data, make_unique)) %>% 
+  tidyr::unnest() %>% 
+  dplyr::select(-date_time) %>% rename(date_time = unique_time)
+```
+
+## Course Speed Filter
+
+This step is optional, but, as we see in this dataset, it is very common for
+Argos data to include obviously wrong locations (locations that are many
+kilometers away from the study area). Including such obviously wrong locations
+in the analysis can result in unexpected issues or problems fitting. For this
+reason, we recommend a course speed filter to remove these obviously wrong
+locations. A typical speed filter might use a value of 2.5 m/s as a biologically
+reasonable value for pinnipeds.
+
+For this application, we will use 7.5 m/s (very conservative) and rely on the
+`argosfilter` package. The example code below follows a typical
+split-apply-combine approach using functions from the `dplyr`, `tidyr`, and
+`purrr` packages. This analysis can be run in series, however, the process lends
+itself nicely to parallel processing. The `parallel` package (included with the
+distribution of R) would be one option for taking advantage of multiple
+processors. However, we want to maintain the `purrr` approach so will use
+`furrr` which brings the `future` parallel processing functionality to `purrr`.
+
+First, lets print out the number or records in each deployment
+
+```{r n-records}
+tbl_locs %>% 
+  dplyr::arrange(deployid, date_time) %>% 
+  dplyr::group_by(deployid) %>% 
+  tidyr::nest() %>% 
+  mutate(n_records = map_int(data,nrow))
+```
+
+And, now, speed filter across multiple processors
+
+```{r speed-filter, message=FALSE}
+library(purrr)
+library(furrr)
+
+future::plan(multiprocess)
+
+tbl_locs <- tbl_locs %>% 
+  dplyr::arrange(deployid, date_time) %>% 
+  dplyr::group_by(deployid) %>% 
+  tidyr::nest() %>% 
+  dplyr::mutate(filtered = furrr::future_map(data, ~ argosfilter::sdafilter(
+    lat = .x$latitude,
+    lon = .x$longitude,
+    dtime = .x$date_time,
+    lc = .x$quality,
+    vmax = 7.5
+  ))) %>% 
+  tidyr::unnest() %>% 
+  dplyr::filter(filtered %in% c("not", "end_location")) %>% 
+  dplyr::select(-filtered) %>% 
+  dplyr::arrange(deployid,date_time)
+```
+
+Let's see if there are any differences from our previous count of records
+
+```{r n-records-post}
+tbl_locs %>% 
+  dplyr::arrange(deployid, date_time) %>% 
+  dplyr::group_by(deployid) %>% 
+  tidyr::nest() %>% 
+  mutate(n_records = map_int(data,nrow))
+```
+
+Note, the previous two steps were done on our `tbl_locs` object which is
+not an `sf` type and still in the geographic coordinate system. The
+`argosfilter` package requires geopgraphic data and cannot accept an `sf`
+object. So, we used `tbl_locs`. But, now, we need to convert and project.
+
+```{r update-sf}
+sf_locs <- sf::st_as_sf(tbl_locs, coords = c("longitude","latitude")) %>% 
+  sf::st_set_crs(4326) %>% 
+  sf::st_transform(3571)
+
+sf_lines <- sf_locs %>% 
+  dplyr::arrange(deployid, date_time) %>% 
+  dplyr::group_by(deployid) %>% 
+  dplyr::summarise(do_union = FALSE) %>% 
+  sf::st_cast("MULTILINESTRING")
+```
+
+And, now, we can plot our data again
+
+```{r plot-raw-lines-update}
+ggplot() + 
+  annotation_spatial(bering, fill = "grey", lwd = 0) +
+  layer_spatial(sf_lines, size = 0.75,aes(color = deployid)) +
+  theme(legend.position = "none") +
+  scale_color_viridis_d() +
+  scale_x_continuous(breaks = seq(-180, 180, by = 5)) +
+  ggtitle("Observed Argos Location Paths (speed filtered)", 
+          subtitle = "bearded and spotted seals, Bering Sea")
+```
+
+## Interactive Plots to Explore Tracks
+
+The `mapview` package provides an easy means for creating interactive
+maps of your spatial data. The one caveat to `mapview` is that it is based
+on the Web Mercator projection (a la Google Maps, etc) and there are some
+extra steps required if your tracks cross the dateline at 180 (which ours do ...
+yay! fun!)
+
+What we need to do is transform our data back to geographic and, then,
+convert the coordinates from -180:180 to 0:360. We will use a custom
+written function to handle this for us.
+
+```{r st-to-360}
+st_to_360 <- function(g) {
+  coords <- (sf::st_geometry(g) + c(360,90)) %% c(360) - c(0,90)
+  g <- sf::st_set_geometry(g,coords) %>% sf::st_set_crs(4326)
+  return(g)
+}
+```
+
+We will use the ESRI Ocean Basemap for our background layer.
+
+```{r wrap-dateline}
+library(mapview)
+sf::st_transform(sf_lines,4326) %>% st_to_360() %>% 
+mapview::mapview(map.types = "Esri.OceanBasemap",zcol = "deployid",
+                 burst = TRUE, legend = FALSE, homebutton = FALSE)
+```
+
+## Create a Nested Tibble
+
+When dealing with large numbers of deployments (and, potentially, wanting
+to take advantage of parallel processing), book-keeping and data management 
+are important.
+
+We suggest organizing your data and analysis results into nested tibbles. This is
+easily created with the `tidyr::nest()` function. In this case, we will organize
+based on the `deployid` group.
+
+```{r create-nested-tbl}
+tbl_data <- sf_locs %>% 
+  dplyr::group_by(deployid) %>% 
+  nest()
+tbl_data
+```
+
+# Fit Movement Model with `crawl::crwMLE()`
+
+To fit a movement model to each collection of observed points, we will use
+the `crawl::crwMLE()` function. The parameters below are a fairly generic
+set of values. Researchers may need to customize these further for their
+particular deployment and species characteristics.
+
+The `fit_func()` is a wrapper that simplifies the downstream `purrr::map()`
+function call.
+
+Also, readers paying close attention may wonder if the `furrr` approach
+described previously for running the speed filter would also work for
+running `crwMLE`. The answer is, yes.
+
+```{r fit-crwmle, message=FALSE}
+# this doc and example requires the devel branch of `crawl` available
+# on GitHub and installed with `devtools`
+#
+# library(devtools)
+# devtools::install_github('NMML/crawl@devel)
+
+library(crawl)
+fixPar <- c(log(250), log(500), log(1500), rep(NA,3), rep(NA,2))
+
+constr = list(lower=c(rep(log(1500),3), rep(-Inf,2)), upper=rep(Inf,5))
+
+fit_func <- function(data,fixPar,constr) {
+  suppressWarnings(
+  crwMLE(mov.model = ~1, 
+                   err.model=list(x=~quality-1), 
+                   data=data, 
+                   Time.name="date_time", 
+                   fixPar=fixPar, 
+                   constr=constr,
+                   control=list(maxit=2000, trace=0, REPORT=1),
+                   attempts=40,
+                   initialSANN=list(maxit=200, trace=0, REPORT=1))
+  )
+}
+
+# fit movement model
+tbl_data <- tbl_data %>% 
+  dplyr::mutate(fit = purrr::map(data,~fit_func(data = .x, constr = constr,
+                                                fixPar = fixPar)))
+
+# predict hourly locations from fit movement model. But, make sure the
+# previous fit process was successful before predicting.
+tbl_data <- tbl_data %>% 
+  dplyr::filter(map_lgl(fit, ~inherits(.x,"crwFit"))) %>% 
+  dplyr::mutate(pred_pts = purrr::map(fit, 
+                                      ~crwPredict(.x, predTime = "1 hour")))
+```
+
+## Convert predicted points to `sf` tracks
+
+Now that we have our tracks fit and predicted paths created, we want to 
+plot them and explore the results. 
+
+The first thing we need to do is convert the `crwPredict` results to 
+`sf` objects. We can do that with a convenience function within the
+latest (you'll need the devel branch from GitHub) version of `crawl`. Note
+that we specify `locType = "p"`. By default, `crwPredict` returns predictions
+at both the specified interval (in this case, hourly) and the time point for
+each corresponding observed location. By specifying `locType = "p"` we only get
+the predicted locations at the regular interval of `1 hour`.
+
+```{r crwpredict-as-sf}
+tbl_data <- tbl_data %>% 
+  dplyr::mutate(
+    pts_sf = purrr::map(pred_pts, ~ crawl::crw_as_sf(.x, ftype = "POINT",
+                                                     locType ="p")),
+    line_sf = purrr::map(pred_pts, ~ crawl::crw_as_sf(.x, ftype = "LINESTRING",
+                                                      locType = "p"))
+    )
+tbl_data
+```
+
+Lets `unnest` our lines and plot them with `mapview`. 
+
+```{r mapview-pred-lines, warning = FALSE}
+tbl_data %>% 
+  dplyr::select(deployid,line_sf) %>% 
+  tidyr::unnest() %>%
+  dplyr::select(-id) %>% 
+  sf::st_as_sf(crs = 3571) %>% 
+  sf::st_transform(4326) %>% st_to_360() %>% 
+mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
+                 burst = TRUE, legend = FALSE, homebutton = FALSE) 
+```
+
+## Fix predicted path around land
+
+Bearded and spotted seals are coastal during some of their behavior and it isn't
+unusual for the predicted tracks to cross land at times. We, ideally, would 
+include a land mask as part of the crwMLE model fit. But, that becomes
+computationally challenging. As a compromise, `crawl` includes a `fix_path()`
+function that (*is very much in beta development*) will re-route portions of the predicted path around land.
+
+```{r fix-path, warning=FALSE, message=FALSE}
+tbl_data <- tbl_data %>%
+  dplyr::mutate(fix = purrr::map2(
+    pred_pts,
+    fit,
+    ~ crawl::fix_path(.x,
+                      vector_mask = bering,
+                      crwFit = .y)
+  ))
+```
+
+Now, let's update our nested tibble with `*_fix` columns. We can also take a
+moment to examine the number of points that may still intersect with our
+land polygon (fingers crossed the resulting value is 0.
+
+```{r fix-as-sf, warning=FALSE}
+tbl_data <- tbl_data %>% 
+  dplyr::mutate(
+    pts_fix = purrr::map(fix, ~ crawl::crw_as_sf(.x, ftype = "POINT",
+                                                      locType = "p")),
+    line_fix = purrr::map(fix, ~ crawl::crw_as_sf(.x, ftype = "LINESTRING",
+                                                      locType = "p"))
+    )
+
+tbl_data %>% 
+  dplyr::select(deployid,pts_fix) %>% 
+  tidyr::unnest() %>%
+  sf::st_as_sf(crs = 3571) %>% 
+  sf::st_intersects(bering) %>% 
+    purrr::map_lgl(~ length(.x) > 0) %>% 
+  sum()
+```
+
+Now, let's go ahead and re-create our `mapview` and zoom in closely to some
+of the coastline and see how things look. One thing to keep in mind is that
+the tracklines may still cross land at some locations since we only predicted
+every hour. There's a tradeoff: the more frequent predictions, the smoother
+the path and the fixed path around land features. But, the computational
+effort will increase.
+
+If you want to challenge your skills, go ahead and create a `mapview` that plots
+`pts_fix` instead of `line_fix`. But, remember the cautionary bit earlier about
+creating _MULTIPOINT_ features instead of sending large _POINT_ features to the
+map.
+
+```{r, warning=FALSE}
+tbl_data %>% 
+  dplyr::select(deployid,line_fix) %>% 
+  tidyr::unnest() %>%
+  dplyr::select(-id) %>% 
+  sf::st_as_sf(crs = 3571) %>% 
+  sf::st_transform(4326) %>% st_to_360() %>% 
+mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
+                 burst = TRUE, legend = FALSE, homebutton = FALSE) 
+```
+
+## Animated Plot
+
+Now, let's make something really cool and animate the tracks. We'll use the
+`gganimate` package. This will probably take about 7-10 minutes to render.
+
+```{r animate, warning=FALSE, message=FALSE, fig.width=6}
+library(gganimate)
+library(ggspatial)
+
+
+pts_by_day <- tbl_data %>% 
+  dplyr::select(deployid,pts_fix) %>% 
+  tidyr::unnest() %>%
+  dplyr::filter(locType == "p") %>% 
+  dplyr::select(deployid,date_time, geometry) %>% 
+  dplyr::mutate(yday = lubridate::yday(date_time)) %>% 
+  sf::st_as_sf(crs = 3571) %>% 
+  dplyr::arrange(deployid,yday) %>% 
+  dplyr::group_by(deployid,yday) %>% 
+  dplyr::summarise(do_union = FALSE)
+
+animated_plot <- ggplot() +
+  annotation_spatial(bering, fill = "grey", lwd = 0) +
+  layer_spatial(pts_by_day, size = 0.75,aes(color = deployid)) +
+  scale_color_viridis_d() + 
+  scale_x_continuous(breaks = seq(-180, 180, by = 5)) +
+  theme(legend.position = "none") +
+  ggtitle("Predicted Movements", 
+          subtitle = "bearded and spotted seals, Bering Sea") +
+  transition_time(yday) +
+  shadow_wake(wake_length = 0.1, alpha = FALSE)
+
+gganimate::animate(animated_plot)
+```

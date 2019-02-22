@@ -1,8 +1,19 @@
 # AK bearded and spotted seal example dataset and analysis
 
-This is a compendium of example data and code designed to help end 
-users explore the crawl package for analysis of animal movement from 
-telemetry data.
+This is a compendium of example data and code designed to help end users explore
+the crawl package for analysis of animal movement from telemetry data.
+
+The `crawl` package is an R package that provides analytical tools for
+estimating the movement paths of animals from telemetry data. The package is
+specifically designed with marine mammals in mind, but other species in other
+habits with similar telemetry devices will work. This package compendium
+provides step-by-step instructions for importing and setting up the telemetry
+data, initiating the `crwMLE()`, `crwPredict(), and
+`crwSimulator()`/'crwPostIS()` functions and visualizing results. The write up
+also discusses use of the `fix_path()` function to re-route predicted tracks
+around land. Examples of data visualization plots are also presented. This
+compendium was originaly developed in support of a training course at the NOAA
+Fisheries Protected Species Assessment Workshop in La Jolla, California, USA.
 
 ## Installation
 
@@ -15,8 +26,8 @@ devtools::install_github('jmlondon/crwexampleakbs')
 
 ## Documentation and Examples
 
-See the vignette for a detailed discussion of the data, example
-analysis, and visulaization plots.
+See [the vignette](https://jmlondon.github.io/crwexampleakbs/analysis.html) for a 
+detailed discussion of the data, example analysis, and visulaization plots.
 
 ## Data Availability and Citation
 
