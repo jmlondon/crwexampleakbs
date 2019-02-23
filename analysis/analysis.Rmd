@@ -1,7 +1,7 @@
 ---
 title: "Alaska bearded and spotted seal example dataset and analysis"
 subtitle: "supporting material for the `crawl` package"
-draft: true
+draft: false
 author:
 - name: Josh M. London
   affiliation: 1
@@ -18,21 +18,20 @@ address:
 date: "`r format(Sys.Date(), '%d %B, %Y')`"
 abstract: >
   The `crawl` package is an R package that provides analytical tools for
-  estimating the movement paths of animals from telemetry data. The package
-  is specifically designed with marine mammals in mind, but other species
-  in other habits with similar telemetry devices will work. This package
-  compendium provides step-by-step instructions for importing and 
-  setting up the telemetry data, initiating the `crwMLE()`, `crwPredict(),
-  and `crwSimulator()`/'crwPostIS()` functions and visualizing results. The
-  write up also discusses use of the `fix_path()` function to re-route
-  predicted tracks around land. A few examples of data visualization
-  plots are also presented. This compendium was originaly developed in 
-  support of a training course at the NOAA Fisheries Protected Species
-  Assessment Workshop in La Jolla, California, USA.
+  estimating the movement paths of animals from telemetry data. The package is
+  specifically designed with marine mammals in mind, but other species in other
+  habits with similar telemetry devices will work. This package compendium
+  provides step-by-step instructions for importing and setting up the telemetry
+  data, initiating the `crwMLE()`, `crwPredict(), and (eventually, when I get
+  around to writing it up) `crwSimulator()`/'crwPostIS()` functions and
+  visualizing results. The write up also discusses use of the `fix_path()`
+  function to re-route predicted tracks around land. A few examples of data
+  visualization plots are also presented. This compendium was originaly
+  developed in support of a training course at the NOAA Fisheries Protected
+  Species Assessment Workshop in La Jolla, California, USA.
 output: 
   uswebr::html_uswds:
     number_sections: FALSE
-    df_print: tibble
 ---
 
 ## Introduction to Telemetry Data
@@ -48,8 +47,6 @@ estimate and those errors are described as either location qualities (3,2,1,0,A,
 or, in more recent data, values that describe the ellipse error for each 
 location. For this example, we will focus on the location quality values
 and use a fairly generic set of values to describe each error quality.
-
-## Loading Raw Telemetry Data
 
 The data for this example are available for download from the original source on
 the [DataONE network](https://search.dataone.org/view/10.24431/rw1k118). These
@@ -67,6 +64,8 @@ behavior of bearded (and spotted) seals, I recommend
 reading [this article](https://doi.org/10.1371/journal.pone.0192743) available
 on PlosONE.
 
+## Loading Raw Telemetry Data
+
 All of the data are stored within the `data-raw` folder of our root
 repository. We will use `list.files` and the `walk` function from
 `purrr` to unzip everything into a temp directory.
@@ -82,9 +81,11 @@ list.files(file.path(data_path), full.names=TRUE, pattern = "*.zip") %>%
   purrr::walk(~ unzip(.x, exdir = td, overwrite = TRUE)) 
 ```
 
-The next step is to read just the _*-Locations.csv_ file into R. The
+The next step is to read just the _\*-Locations.csv_ file into R. The
 `readr::read_csv()` function allows us to set the column data types
-in advance
+in advance so we don't have to mess with converting types afterwards. If you
+have telemetry data from the Wildlife Computers data portal, these 
+specifications should work for you as well.
 
 ```{r col-types}
 my_cols <- cols(
@@ -110,7 +111,7 @@ my_cols <- cols(
 ```
 
 Now, we can combine the power of `readr::read_csv()` with `purrr:map_df()`
-to read in all of the _*-Locations.csv_ files into a single tibble (data.frame).
+to read in all of the _\*-Locations.csv_ files into a single tibble (data.frame).
 
 ```{r read-csv}
 tbl_locs <- list.files(file.path(td), full.names = TRUE, 
@@ -166,6 +167,9 @@ To further explore our imported data and confirm there aren’t any remaining
 issues to address, we can create visual representations of the data. The first
 plot will rely on the spatial features within `ggplot2` and a custom `ptolemy`
 package with world coastline data to create a plot of the `tbl_locs` object.
+You can read up more on the `ptolemy` package on 
+[the GitHub repo](https://github.com/jmlondon/ptolemy) and use
+`devtools::install_github('jmlondon/ptolemy')` to install.
 
 The `sf` package provides the bulk of our spatial data framework. This is not
 intended to be a full `sf` tutorial, but, where possible, we will highlight a few
@@ -173,7 +177,10 @@ features and functions to explain the workflow. Users are encouraged to spend
 significant time exploring and understanding the `sf` package through existing
 documentation and several examples and blog posts available online. We also load
 the `ggspatial` package for some convenience elements when plotting maps with
-`ggplot`. 
+`ggplot`. If you are going to be making a lot of maps with `sf` and `ggplot2`,
+I strongly suggest learning and adopting the functions within `ggspatial`. You
+will save yourself a lot of time futzing with bounding boxes and other
+parameters.
 
 ```{r spatial-libs}
 library(sf)
@@ -189,11 +196,14 @@ Here, we are simply creating an `sf_locs` object via the `sf::st_as_sf()`
 function. We specify the coordinate columns and then indicate the projection 
 of the data is geographic (lat/lon) as indicated by the _4326_ epsg code.
 
-In addition to points, it is often useful to organize the point data into 
-separate tracks for each deployment. The code to derive tracks from point 
-data within `sf` is a bit more complicated but is demonstrated below. It is
-important that you include the `do_union = FALSE` argument to the
-`dplyr::summarise()` function to maintain point order when creating the lines.
+In addition to points, it is often useful to organize the point data into
+separate tracks for each deployment. The code to derive tracks from point data
+within `sf` is a bit more complicated but is demonstrated below. It is important
+that you include the `do_union = FALSE` argument to the `dplyr::summarise()`
+function to maintain point order when creating the lines (and, in general, when
+in doubt, insert a `dplyr::arrange(deployid, date_time)` call. The
+`sf::st_cast("MULTILINESTRING")` step at the end converts the final geometry for
+our object to _MULTILINESTRING_.
 
 ```{r create-sf-objects}
 sf_locs <- sf::st_as_sf(tbl_locs, coords = c("longitude","latitude")) %>% 
@@ -209,7 +219,11 @@ sf_lines <- sf_locs %>%
 The `sf_lines` object is, essentially, a data frame with each row representing 
 a single line from a single deployment.
 
-These data are still in the WGS84 geographic coordinate system. Projecting the
+```{ r show-sf-lines}
+sf_lines
+```
+
+These data are still in the _WGS84_ geographic coordinate system. Projecting the
 data into a more appropriate coordinate reference system is strongly
 encouraged and needed for some functionality in `crawl`. This is especially
 important when/if data cross the 180 line, are spread over a large
@@ -223,7 +237,8 @@ sf_lines <- sf_lines %>%
 ```
 
 The `ptolemy` package provides a number of pre-built collections of coastline
-data. In this case, we are interested in Alaska and the Bering Sea.
+data as `sf` objects. In this case, we are interested in Alaska and the 
+Bering Sea.
 
 ```{r ak-bering-coastline}
 bering <- ptolemy::bering()
@@ -378,7 +393,7 @@ sf_lines <- sf_locs %>%
   sf::st_cast("MULTILINESTRING")
 ```
 
-And, now, we can plot our data again
+And, then, we can plot our data again
 
 ```{r plot-raw-lines-update}
 ggplot() + 
@@ -411,7 +426,11 @@ st_to_360 <- function(g) {
 }
 ```
 
-We will use the ESRI Ocean Basemap for our background layer.
+We will use the ESRI Ocean Basemap for our background layer. The default view
+for `mapview` would create a legend with the colors for each `deployid` listed.
+My preference is for something less cluttered. We want each `deployid` to show up
+as a layer that can be turned on/off. To do this, we specificy `burst = TRUE` and
+turn off the `legend` and `homebutton`.
 
 ```{r wrap-dateline}
 library(mapview)
@@ -437,7 +456,7 @@ tbl_data <- sf_locs %>%
 tbl_data
 ```
 
-# Fit Movement Model with `crawl::crwMLE()`
+## Fit Movement Model with `crawl::crwMLE()`
 
 To fit a movement model to each collection of observed points, we will use
 the `crawl::crwMLE()` function. The parameters below are a fairly generic
@@ -449,7 +468,10 @@ function call.
 
 Also, readers paying close attention may wonder if the `furrr` approach
 described previously for running the speed filter would also work for
-running `crwMLE`. The answer is, yes.
+running `crwMLE`. The answer is, yes. But, we'll leave that for you to work
+out on your own. I will advise that you read up on the `purrr::safely()`
+function as a way to make sure a misfit deployment doesn't break the entire
+process.
 
 ```{r fit-crwmle, message=FALSE}
 # this doc and example requires the devel branch of `crawl` available
@@ -481,27 +503,55 @@ fit_func <- function(data,fixPar,constr) {
 tbl_data <- tbl_data %>% 
   dplyr::mutate(fit = purrr::map(data,~fit_func(data = .x, constr = constr,
                                                 fixPar = fixPar)))
+```
 
-# predict hourly locations from fit movement model. But, make sure the
-# previous fit process was successful before predicting.
+## Predict Hourly Locations
+
+Now that we have a model fit for each deployment, we want to predict hourly 
+locations from fit movement model. This is payoff for all the work to this
+point. By creating regular (in time) predictions for our deployments, we can
+open the door to additional analysis (e.g. see the `momentuHMM` and `ctmcmove`
+packages).
+
+The time interval you choose for predicting is up to you. You can even provide
+a vector of prediction times. For convenience, `predTime` accepts a character
+string describing the time interval. In this case we use _1 hour_.
+
+Lastly, you'll want to make sure the previous fit process was successful 
+before predicting. The `crwMLE()` function should only return a `crwFit`
+object if the fit was fully successful. That's what we are checking for in the
+`filter` step below.
+
+```{r predict-tracks, message = FALSE}
+
 tbl_data <- tbl_data %>% 
   dplyr::filter(map_lgl(fit, ~inherits(.x,"crwFit"))) %>% 
   dplyr::mutate(pred_pts = purrr::map(fit, 
                                       ~crwPredict(.x, predTime = "1 hour")))
 ```
 
+## Simulate Other Possible Tracks
+
+The output from `crwPredict()` represents predictions along the _most likely
+track_. But, we might also want to explore (or analyze) the broader range of
+possible tracks. The combination of `crwSimulator()` and `crwPostIS` functions
+can do this. 
+
+> some point in the near future, I'll revisit this section and expand with
+example code and plots for simulated tracks
+
 ## Convert predicted points to `sf` tracks
 
 Now that we have our tracks fit and predicted paths created, we want to 
 plot them and explore the results. 
 
-The first thing we need to do is convert the `crwPredict` results to 
-`sf` objects. We can do that with a convenience function within the
-latest (you'll need the devel branch from GitHub) version of `crawl`. Note
-that we specify `locType = "p"`. By default, `crwPredict` returns predictions
-at both the specified interval (in this case, hourly) and the time point for
-each corresponding observed location. By specifying `locType = "p"` we only get
-the predicted locations at the regular interval of `1 hour`.
+The first thing we need to do is convert the `crwPredict` results to `sf`
+objects. We can do that with a convenience function within the latest (remember,
+you'll need the devel branch from GitHub) version of `crawl`. Note that we
+specify `locType = "p"`. By default, `crwPredict` returns predictions at both
+the specified interval (in this case, hourly) and the time point for each
+corresponding observed location. By specifying `locType = "p"` we only get the
+predicted locations at the regular interval of _1 hour_.
 
 ```{r crwpredict-as-sf}
 tbl_data <- tbl_data %>% 
@@ -514,7 +564,7 @@ tbl_data <- tbl_data %>%
 tbl_data
 ```
 
-Lets `unnest` our lines and plot them with `mapview`. 
+Lets _unnest_ our lines and plot them with `mapview`. 
 
 ```{r mapview-pred-lines, warning = FALSE}
 tbl_data %>% 
@@ -530,10 +580,22 @@ mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
 ## Fix predicted path around land
 
 Bearded and spotted seals are coastal during some of their behavior and it isn't
-unusual for the predicted tracks to cross land at times. We, ideally, would 
-include a land mask as part of the crwMLE model fit. But, that becomes
-computationally challenging. As a compromise, `crawl` includes a `fix_path()`
-function that (*is very much in beta development*) will re-route portions of the predicted path around land.
+unusual for the predicted tracks to cross land at times. 
+
+```{r check-for-onland-pts}
+tbl_data %>% 
+  dplyr::select(deployid, pts_sf) %>% 
+  tidyr::unnest() %>%
+  sf::st_as_sf(crs = 3571) %>% 
+  sf::st_intersects(bering) %>% 
+    purrr::map_lgl(~ length(.x) > 0) %>% 
+  sum()
+```
+
+We, ideally, would include a land mask as part of the crwMLE model fit. But,
+that becomes computationally challenging. As a compromise, `crawl` includes a
+`fix_path()` function that (*is very much in beta development*) will re-route
+portions of the predicted path around land.
 
 ```{r fix-path, warning=FALSE, message=FALSE}
 tbl_data <- tbl_data %>%
@@ -546,9 +608,9 @@ tbl_data <- tbl_data %>%
   ))
 ```
 
-Now, let's update our nested tibble with `*_fix` columns. We can also take a
+Now, let's update our nested tibble with _\*_fix_ columns. We can also take a
 moment to examine the number of points that may still intersect with our
-land polygon (fingers crossed the resulting value is 0.
+land polygon (fingers crossed the resulting value is 0).
 
 ```{r fix-as-sf, warning=FALSE}
 tbl_data <- tbl_data %>% 
@@ -596,7 +658,7 @@ mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
 Now, let's make something really cool and animate the tracks. We'll use the
 `gganimate` package. This will probably take about 7-10 minutes to render.
 
-```{r animate, warning=FALSE, message=FALSE, fig.width=6}
+```{r animate, warning=FALSE, message=FALSE, fig.width=7, fig.height=7}
 library(gganimate)
 library(ggspatial)
 
