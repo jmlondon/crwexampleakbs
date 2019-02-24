@@ -22,8 +22,8 @@ abstract: >
   specifically designed with marine mammals in mind, but other species in other
   habits with similar telemetry devices will work. This package compendium
   provides step-by-step instructions for importing and setting up the telemetry
-  data, initiating the `crwMLE()`, `crwPredict(), and (eventually, when I get
-  around to writing it up) `crwSimulator()`/'crwPostIS()` functions and
+  data, initiating the `crwMLE()`, `crwPredict()`, and (eventually, when I get
+  around to writing it up) `crwSimulator()` + `crwPostIS()` functions and
   visualizing results. The write up also discusses use of the `fix_path()`
   function to re-route predicted tracks around land. A few examples of data
   visualization plots are also presented. This compendium was originaly
@@ -582,7 +582,7 @@ mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
 Bearded and spotted seals are coastal during some of their behavior and it isn't
 unusual for the predicted tracks to cross land at times. 
 
-```{r check-for-onland-pts}
+```{r check-for-onland-pts, warning=FALSE, message=FALSE}
 tbl_data %>% 
   dplyr::select(deployid, pts_sf) %>% 
   tidyr::unnest() %>%
@@ -658,7 +658,7 @@ mapview::mapview(map.types = "Esri.OceanBasemap", zcol = "deployid",
 Now, let's make something really cool and animate the tracks. We'll use the
 `gganimate` package. This will probably take about 7-10 minutes to render.
 
-```{r animate, warning=FALSE, message=FALSE, fig.width=7, fig.height=7}
+```{r animate, warning=FALSE, message=FALSE, fig.height=8}
 library(gganimate)
 library(ggspatial)
 
@@ -668,7 +668,8 @@ pts_by_day <- tbl_data %>%
   tidyr::unnest() %>%
   dplyr::filter(locType == "p") %>% 
   dplyr::select(deployid,date_time, geometry) %>% 
-  dplyr::mutate(yday = lubridate::yday(date_time)) %>% 
+  dplyr::mutate(anim_date = format(date_time, format="%B %d"),
+                yday = lubridate::yday(date_time)) %>% 
   sf::st_as_sf(crs = 3571) %>% 
   dplyr::arrange(deployid,yday) %>% 
   dplyr::group_by(deployid,yday) %>% 
@@ -680,7 +681,7 @@ animated_plot <- ggplot() +
   scale_color_viridis_d() + 
   scale_x_continuous(breaks = seq(-180, 180, by = 5)) +
   theme(legend.position = "none") +
-  ggtitle("Predicted Movements", 
+  ggtitle("Predicted Movements, Day of Year: {as.integer(frame_time)}", 
           subtitle = "bearded and spotted seals, Bering Sea") +
   transition_time(yday) +
   shadow_wake(wake_length = 0.1, alpha = FALSE)
